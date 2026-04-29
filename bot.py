@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 from telegram import Update
 from telegram.ext import (
@@ -12,11 +12,11 @@ from telegram.ext import (
 )
 
 
-# Railway variables:
+# Railway variables recomendadas:
 # TELEGRAM_TOKEN=token_del_bot
 # OPENWEATHER_API_KEY=api_key_openweather
 #
-# Fallbacks por si las pusiste como TOKEN o API_KEY:
+# También acepta TOKEN y API_KEY como nombres alternativos.
 TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TOKEN")
 API_KEY = os.getenv("OPENWEATHER_API_KEY") or os.getenv("API_KEY")
 
@@ -26,7 +26,7 @@ def formatear_hora(unix_time, timezone_offset=0):
         return "N/A"
 
     try:
-        dt = datetime.utcfromtimestamp(unix_time + timezone_offset)
+        dt = datetime.fromtimestamp(unix_time + timezone_offset, timezone.utc)
         return dt.strftime("%H:%M")
     except Exception:
         return "N/A"
@@ -47,7 +47,7 @@ def direccion_viento(grados):
 def emoji_clima(descripcion):
     desc = str(descripcion).lower()
 
-    if "torment" in desc:
+    if "torment" in desc or "thunderstorm" in desc:
         return "⛈️"
     if "lluv" in desc or "drizzle" in desc or "rain" in desc:
         return "🌧️"
@@ -82,10 +82,14 @@ def consejo_temperatura(temp):
 def formatear_numero(valor, sufijo=""):
     if isinstance(valor, (int, float)):
         return f"{round(valor, 1)}{sufijo}"
+
     return f"N/A{sufijo}" if sufijo else "N/A"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+
     await update.message.reply_text(
         "Dime una ciudad 🌍\n"
         "Ejemplo: Almería, Madrid, París, Tokio..."
@@ -93,6 +97,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
     city = update.message.text.strip()
 
     if not city:
@@ -159,7 +166,12 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sunrise = sys_data.get("sunrise")
         sunset = sys_data.get("sunset")
 
-        vis_km = round(visibility / 1000, 1) if isinstance(visibility, (int, float)) else "N/A"
+        vis_km = (
+            round(visibility / 1000, 1)
+            if isinstance(visibility, (int, float))
+            else "N/A"
+        )
+
         viento_cardinal = direccion_viento(wind_deg)
         consejo = consejo_temperatura(temp)
 
@@ -211,6 +223,7 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, weather))
 
     print("Bot del tiempo arrancado correctamente.")
