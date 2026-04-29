@@ -1,36 +1,55 @@
 import os
 import requests
 from datetime import datetime
+
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 
-TOKEN = os.getenv("8576848943:AAFXA8S-XFMY1ezUDqk1WwcB2Z9WOZLbAcU")
-API_KEY = os.getenv("a3ca679b828a23fb0ff7faa68aab492f")
+# Railway variables:
+# TELEGRAM_TOKEN=token_del_bot
+# OPENWEATHER_API_KEY=api_key_openweather
+#
+# Fallbacks por si las pusiste como TOKEN o API_KEY:
+TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("TOKEN")
+API_KEY = os.getenv("OPENWEATHER_API_KEY") or os.getenv("API_KEY")
 
 
 def formatear_hora(unix_time, timezone_offset=0):
     if unix_time in (None, "N/A"):
         return "N/A"
-    dt = datetime.utcfromtimestamp(unix_time + timezone_offset)
-    return dt.strftime("%H:%M")
+
+    try:
+        dt = datetime.utcfromtimestamp(unix_time + timezone_offset)
+        return dt.strftime("%H:%M")
+    except Exception:
+        return "N/A"
 
 
 def direccion_viento(grados):
     if grados in (None, "N/A"):
         return "N/A"
 
-    direcciones = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"]
-    indice = round(grados / 45) % 8
-    return direcciones[indice]
+    try:
+        direcciones = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"]
+        indice = round(grados / 45) % 8
+        return direcciones[indice]
+    except Exception:
+        return "N/A"
 
 
 def emoji_clima(descripcion):
-    desc = descripcion.lower()
+    desc = str(descripcion).lower()
 
     if "torment" in desc:
         return "⛈️"
-    if "lluv" in desc or "drizzle" in desc:
+    if "lluv" in desc or "drizzle" in desc or "rain" in desc:
         return "🌧️"
     if "nieve" in desc or "snow" in desc:
         return "❄️"
@@ -45,7 +64,7 @@ def emoji_clima(descripcion):
 
 
 def consejo_temperatura(temp):
-    if temp == "N/A":
+    if not isinstance(temp, (int, float)):
         return ""
 
     if temp >= 35:
@@ -56,7 +75,14 @@ def consejo_temperatura(temp):
         return "👌 Temperatura agradable"
     if temp >= 10:
         return "🧥 Fresquito suave"
+
     return "🥶 Hace frío"
+
+
+def formatear_numero(valor, sufijo=""):
+    if isinstance(valor, (int, float)):
+        return f"{round(valor, 1)}{sufijo}"
+    return f"N/A{sufijo}" if sufijo else "N/A"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -74,44 +100,64 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = "https://api.openweathermap.org/data/2.5/weather"
+
     params = {
         "q": city,
         "appid": API_KEY,
         "units": "metric",
-        "lang": "es"
+        "lang": "es",
     }
 
     try:
         response = requests.get(url, params=params, timeout=10)
-        data = response.json()
+
+        try:
+            data = response.json()
+        except ValueError:
+            await update.message.reply_text("La API devolvió una respuesta no válida.")
+            return
+
+        if response.status_code == 401:
+            await update.message.reply_text("La API key de OpenWeather no es válida.")
+            return
+
+        if response.status_code == 404:
+            await update.message.reply_text("No encontré esa ciudad 😅")
+            return
 
         if response.status_code != 200 or not data.get("main"):
-            await update.message.reply_text("No encontré esa ciudad 😅")
+            await update.message.reply_text("No pude consultar el tiempo ahora mismo.")
             return
 
         nombre = data.get("name", city)
         pais = data.get("sys", {}).get("country", "")
         timezone_offset = data.get("timezone", 0)
 
-        temp = data["main"].get("temp", "N/A")
-        feels_like = data["main"].get("feels_like", "N/A")
-        temp_min = data["main"].get("temp_min", "N/A")
-        temp_max = data["main"].get("temp_max", "N/A")
-        humidity = data["main"].get("humidity", "N/A")
-        pressure = data["main"].get("pressure", "N/A")
+        main_data = data.get("main", {})
+        weather_data = data.get("weather", [{}])[0]
+        wind_data = data.get("wind", {})
+        clouds_data = data.get("clouds", {})
+        sys_data = data.get("sys", {})
 
-        descripcion = data["weather"][0].get("description", "sin datos")
+        temp = main_data.get("temp", "N/A")
+        feels_like = main_data.get("feels_like", "N/A")
+        temp_min = main_data.get("temp_min", "N/A")
+        temp_max = main_data.get("temp_max", "N/A")
+        humidity = main_data.get("humidity", "N/A")
+        pressure = main_data.get("pressure", "N/A")
+
+        descripcion = weather_data.get("description", "sin datos")
         clima_emoji = emoji_clima(descripcion)
 
-        wind_speed = data.get("wind", {}).get("speed", "N/A")
-        wind_deg = data.get("wind", {}).get("deg", None)
-        wind_gust = data.get("wind", {}).get("gust", "N/A")
+        wind_speed = wind_data.get("speed", "N/A")
+        wind_deg = wind_data.get("deg", None)
+        wind_gust = wind_data.get("gust", "N/A")
 
-        clouds = data.get("clouds", {}).get("all", "N/A")
+        clouds = clouds_data.get("all", "N/A")
         visibility = data.get("visibility", "N/A")
 
-        sunrise = data.get("sys", {}).get("sunrise")
-        sunset = data.get("sys", {}).get("sunset")
+        sunrise = sys_data.get("sunrise")
+        sunset = sys_data.get("sunset")
 
         vis_km = round(visibility / 1000, 1) if isinstance(visibility, (int, float)) else "N/A"
         viento_cardinal = direccion_viento(wind_deg)
@@ -119,11 +165,11 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         mensaje = (
             f"📍 {nombre}, {pais}\n"
-            f"{clima_emoji} Estado: {descripcion.capitalize()}\n\n"
-            f"🌡️ Temperatura: {temp}°C\n"
-            f"🥵 Sensación térmica: {feels_like}°C\n"
-            f"⬇️ Mínima: {temp_min}°C\n"
-            f"⬆️ Máxima: {temp_max}°C\n\n"
+            f"{clima_emoji} Estado: {str(descripcion).capitalize()}\n\n"
+            f"🌡️ Temperatura: {formatear_numero(temp, '°C')}\n"
+            f"🥵 Sensación térmica: {formatear_numero(feels_like, '°C')}\n"
+            f"⬇️ Mínima: {formatear_numero(temp_min, '°C')}\n"
+            f"⬆️ Máxima: {formatear_numero(temp_max, '°C')}\n\n"
             f"💧 Humedad: {humidity}%\n"
             f"🧭 Presión: {pressure} hPa\n"
             f"🌬️ Viento: {wind_speed} m/s ({viento_cardinal})\n"
@@ -148,18 +194,26 @@ async def weather(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    print("Iniciando bot del tiempo...")
+
     if not TOKEN:
-        raise RuntimeError("Falta TELEGRAM_TOKEN en variables de entorno.")
+        raise RuntimeError(
+            "Falta TELEGRAM_TOKEN en Railway. "
+            "También acepto TOKEN como nombre alternativo."
+        )
 
     if not API_KEY:
-        raise RuntimeError("Falta OPENWEATHER_API_KEY en variables de entorno.")
+        raise RuntimeError(
+            "Falta OPENWEATHER_API_KEY en Railway. "
+            "También acepto API_KEY como nombre alternativo."
+        )
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, weather))
 
-    print("Bot del tiempo arrancado...")
+    print("Bot del tiempo arrancado correctamente.")
     app.run_polling(drop_pending_updates=True)
 
 
